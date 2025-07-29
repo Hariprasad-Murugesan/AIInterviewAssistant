@@ -1,28 +1,31 @@
 """
 TranscriberModels.py
 ------
-这个脚本定义了获取音频转录模型的函数和两个实现转录功能的类（WhisperTranscriber 和 APIWhisperTranscriber）。根据是否使用API，返回相应的模型对象。
 """
 
-import openai
-import whisper
+
 import os
 import torch
+import assemblyai as aai  # Import AssemblyAI SDK
 
-# 根据是否使用API，返回相应的音频转录模型对象。
+# Configure AssemblyAI API key (replace with your actual key)
+aai.settings.api_key = "faddcc17140b4552a73a1af9d065fd31"  # Add your AssemblyAI API key
+
+
 def get_model(use_api):
     if use_api:
         return APIWhisperTranscriber()
     else:
         return WhisperTranscriber()
-# WhisperTranscriber 类使用 Whisper 模型进行音频转录。
+
+# WhisperTranscriber Whisper 。
 class WhisperTranscriber:
-    # 初始化 WhisperTranscriber 对象，加载 Whisper 模型。
+    # WhisperTranscriber  Whisper 。
     def __init__(self):
-        self.audio_model = whisper.load_model(os.path.join(os.getcwd(), 'whisper_models','tiny.pt'))
+        self.audio_model = whisper.load_model(os.path.join(os.getcwd(), 'whisper_models', 'tiny.pt'))
         print(f"[INFO] Whisper using GPU: " + str(torch.cuda.is_available()))
 
-    # 获取音频文件的转录文本。
+    
     def get_transcription(self, wav_file_path):
         try:
             result = self.audio_model.transcribe(wav_file_path, fp16=torch.cuda.is_available())
@@ -31,14 +34,25 @@ class WhisperTranscriber:
             return ''
         return result['text'].strip()
 
-# APIWhisperTranscriber 类使用 OpenAI 的 Whisper API 进行音频转录。
+# APIWhisperTranscriber AssemblyAI API 。
 class APIWhisperTranscriber:
-    # 获取音频文件的转录文本。
+    
     def get_transcription(self, wav_file_path):
         try:
-            with open(wav_file_path, "rb") as audio_file:
-                result = openai.Audio.transcribe("whisper-1", audio_file)
+            # Configure the transcriber
+            config = aai.TranscriptionConfig(language_code="en")  # Adjust language if needed
+            transcriber = aai.Transcriber()
+            
+            # Transcribe the audio file
+            transcript = transcriber.transcribe(wav_file_path, config=config)
+            
+            # Check for errors
+            if transcript.status == aai.TranscriptStatus.error:
+                print(f"Transcription failed: {transcript.error}")
+                return ''
+            
+            # Return the transcribed text
+            return transcript.text.strip()
         except Exception as e:
-            print(e)
+            print(f"Error during transcription: {e}")
             return ''
-        return result['text'].strip()

@@ -1,11 +1,8 @@
 """
 AudioTranscriber.py
 ------
-这个脚本定义了音频转录相关的类，用于从麦克风和扬声器的音频数据中转录文本。包括音频处理、转录、和文本更新等功能。
 """
 
-import whisper
-import torch
 import wave
 import os
 import threading
@@ -15,19 +12,21 @@ import io
 from datetime import timedelta
 import pyaudiowpatch as pyaudio
 from heapq import merge
+import assemblyai as aai
+from keys import Assembly_API_KEY
+
+# Configure AssemblyAI API key
+aai.settings.api_key = "faddcc17140b4552a73a1af9d065fd31"  # Replace with your API key
 
 PHRASE_TIMEOUT = 3.05
-
 MAX_PHRASES = 10
 
-
-# AudioTranscriber 类用于音频转录和管理转录文本。
 class AudioTranscriber:
-    # 初始化 AudioTranscriber 对象，设置音频源和模型。
-    def __init__(self, mic_source, speaker_source, model):
+    def __init__(self, mic_source, speaker_source):
         self.transcript_data = {"You": [], "Speaker": []}
         self.transcript_changed_event = threading.Event()
-        self.audio_model = model
+        self.transcriber = aai.Transcriber()
+        self.config = aai.TranscriptionConfig(language_code="en")
         self.audio_sources = {
             "You": {
                 "sample_rate": mic_source.SAMPLE_RATE,
@@ -49,7 +48,6 @@ class AudioTranscriber:
             }
         }
 
-    # 处理音频队列中的数据，将音频数据转录为文本并更新转录数据。
     def transcribe_audio_queue(self, audio_queue):
         while True:
             who_spoke, data, time_spoken = audio_queue.get()
@@ -61,9 +59,13 @@ class AudioTranscriber:
                 fd, path = tempfile.mkstemp(suffix=".wav")
                 os.close(fd)
                 source_info["process_data_func"](source_info["last_sample"], path)
-                text = self.audio_model.get_transcription(path)
+                transcript = self.transcriber.transcribe(path, config=self.config)
+                if transcript.status == aai.TranscriptStatus.error:
+                    print(f"Transcription failed: {transcript.error}")
+                else:
+                    text = transcript.text
             except Exception as e:
-                print(e)
+                print(f"Transcription error: {e}")
             finally:
                 os.unlink(path)
 
@@ -71,7 +73,6 @@ class AudioTranscriber:
                 self.update_transcript(who_spoke, text, time_spoken)
                 self.transcript_changed_event.set()
 
-    # 更新最近的样本数据和短语状态。
     def update_last_sample_and_phrase_status(self, who_spoke, data, time_spoken):
         source_info = self.audio_sources[who_spoke]
         if source_info["last_spoken"] and time_spoken - source_info["last_spoken"] > timedelta(seconds=PHRASE_TIMEOUT):
@@ -83,15 +84,12 @@ class AudioTranscriber:
         source_info["last_sample"] += data
         source_info["last_spoken"] = time_spoken
 
-        # 处理麦克风数据，将其转换为 WAV 格式。
-
     def process_mic_data(self, data, temp_file_name):
         audio_data = sr.AudioData(data, self.audio_sources["You"]["sample_rate"], self.audio_sources["You"]["sample_width"])
         wav_data = io.BytesIO(audio_data.get_wav_data())
         with open(temp_file_name, 'w+b') as f:
             f.write(wav_data.read())
 
-    # 处理扬声器数据，将其转换为 WAV 格式。
     def process_speaker_data(self, data, temp_file_name):
         with wave.open(temp_file_name, 'wb') as wf:
             wf.setnchannels(self.audio_sources["Speaker"]["channels"])
@@ -100,7 +98,6 @@ class AudioTranscriber:
             wf.setframerate(self.audio_sources["Speaker"]["sample_rate"])
             wf.writeframes(data)
 
-    # 更新转录数据，将新的转录文本添加到适当的位置。
     def update_transcript(self, who_spoke, text, time_spoken):
         source_info = self.audio_sources[who_spoke]
         transcript = self.transcript_data[who_spoke]
@@ -112,7 +109,6 @@ class AudioTranscriber:
         else:
             transcript[0] = (f"{who_spoke}: [{text}]\n\n", time_spoken)
 
-    # 获取组合的转录文本，按时间顺序排列。
     def get_transcript(self):
         combined_transcript = list(merge(
             self.transcript_data["You"], self.transcript_data["Speaker"],
@@ -120,13 +116,10 @@ class AudioTranscriber:
         combined_transcript = combined_transcript[:MAX_PHRASES]
         return "".join([t[0] for t in combined_transcript])
 
-    # 清除转录数据和音频源的状态。
     def clear_transcript_data(self):
         self.transcript_data["You"].clear()
         self.transcript_data["Speaker"].clear()
-
         self.audio_sources["You"]["last_sample"] = bytes()
         self.audio_sources["Speaker"]["last_sample"] = bytes()
-
         self.audio_sources["You"]["new_phrase"] = True
         self.audio_sources["Speaker"]["new_phrase"] = True
